@@ -1,0 +1,52 @@
+{
+  "name": "vue-web-storage",
+  "version": "1.0.0",
+  "description": "一个轻量、支持类型、支持过期时间的 Vue Web Storage 封装库",
+  "main": "dist/vue-web-storage.umd.js",
+  "module": "dist/vue-web-storage.esm.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "vue",
+    "storage",
+    "localStorage",
+    "sessionStorage",
+    "typescript",
+    "expire"
+  ],
+  "author": "caiqianha",
+  "license": "MIT",
+  "peerDependencies": {
+    "vue": "^3.0.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^28.0.6",
+    "@rollup/plugin-node-resolve": "^16.0.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.1.4",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "rollup": "^4.46.1",
+    "rollup-plugin-dts": "^6.2.1",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.6",
+    "vue": "^3.5.18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/caiqianhaha/vue-web-storage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/caiqianhaha/vue-web-storage/issues"
+  },
+  "homepage": "https://github.com/caiqianhaha/vue-web-storage#readme"
+}
