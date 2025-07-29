@@ -23,11 +23,11 @@
 ## 📦 安装
 
 ```bash
-npm install vue-web-storage
+npm install vue-web-super-storage
 # 或
-yarn add vue-web-storage
+yarn add vue-web-super-storage
 # 或
-pnpm add vue-web-storage
+pnpm add vue-web-super-storage
 ```
 
 ## 🚀 快速开始
