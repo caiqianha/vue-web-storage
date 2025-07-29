@@ -1,5 +1,5 @@
 /*!
- * vue-web-storage v1.0.0
+ * vue-web-super-storage v1.0.0
  * (c) 2025 caiqianha
  * Released under the MIT License.
  */

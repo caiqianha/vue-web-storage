@@ -1,5 +1,5 @@
 {
-  "name": "vue-web-storage",
+  "name": "vue-web-super-storage",
   "version": "1.0.0",
   "description": "一个轻量、支持类型、支持过期时间的 Vue Web Storage 封装库",
   "main": "dist/vue-web-storage.umd.js",
