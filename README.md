@@ -370,4 +370,4 @@ storage.set('sensitive-data', { password: '123456' })
 
 如果这个库对你有帮助，请给一个 ⭐️ Star！
 
-如有问题，请提交 [Issue](https://github.com/caiqianhaha/vue-web-storage/issues)。
+如有问题，请提交 [Issue](https://github.com/caiqianha/vue-web-storage/issues)。
