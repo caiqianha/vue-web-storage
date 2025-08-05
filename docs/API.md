@@ -31,7 +31,7 @@ constructor(options?: StorageOptions)
 
 **示例：**
 ```typescript
-import { WebStorage, StorageType } from 'vue-web-storage'
+import { WebStorage, StorageType } from 'vue-web-super-storage'
 
 const storage = new WebStorage({
   type: StorageType.LOCAL,
@@ -236,7 +236,7 @@ constructor(key: string, defaultValue: T, options?: StorageOptions)
 
 **示例：**
 ```typescript
-import { StorageState } from 'vue-web-storage'
+import { StorageState } from 'vue-web-super-storage'
 
 const userState = new StorageState('user', { name: '', age: 0 })
 ```
@@ -333,7 +333,7 @@ function useStorage<T>(
 
 **示例：**
 ```typescript
-import { useStorage, StorageType } from 'vue-web-storage'
+import { useStorage, StorageType } from 'vue-web-super-storage'
 
 const [theme, setTheme, removeTheme] = useStorage('theme', 'light', {
   type: StorageType.LOCAL,
@@ -359,7 +359,7 @@ function useLocalStorage<T>(
 
 **示例：**
 ```typescript
-import { useLocalStorage } from 'vue-web-storage'
+import { useLocalStorage } from 'vue-web-super-storage'
 
 const [user, setUser, removeUser] = useLocalStorage('user', { name: '', age: 0 })
 ```
@@ -378,7 +378,7 @@ function useSessionStorage<T>(
 
 **示例：**
 ```typescript
-import { useSessionStorage } from 'vue-web-storage'
+import { useSessionStorage } from 'vue-web-super-storage'
 
 const [tempData, setTempData, removeTempData] = useSessionStorage('temp', '')
 ```
@@ -397,7 +397,7 @@ function createStorageState<T>(
 
 **示例：**
 ```typescript
-import { createStorageState } from 'vue-web-storage'
+import { createStorageState } from 'vue-web-super-storage'
 
 const userState = createStorageState('user', { name: '', age: 0 })
 ```
@@ -417,7 +417,7 @@ function useBatchStorage(options?: StorageOptions): {
 
 **示例：**
 ```typescript
-import { useBatchStorage } from 'vue-web-storage'
+import { useBatchStorage } from 'vue-web-super-storage'
 
 const { batchSet, batchGet, batchRemove } = useBatchStorage()
 
@@ -444,7 +444,7 @@ Vue 3 插件，提供全局存储实例。
 **安装：**
 ```typescript
 import { createApp } from 'vue'
-import VueWebStorage from 'vue-web-storage'
+import VueWebStorage from 'vue-web-super-storage'
 
 app.use(VueWebStorage, options)
 ```
@@ -556,7 +556,7 @@ interface StorageEventData {
 
 **示例：**
 ```typescript
-import { formatBytes } from 'vue-web-storage'
+import { formatBytes } from 'vue-web-super-storage'
 
 console.log(formatBytes(1024)) // "1 KB"
 console.log(formatBytes(1048576)) // "1 MB"
@@ -568,7 +568,7 @@ console.log(formatBytes(1048576)) // "1 MB"
 
 **示例：**
 ```typescript
-import { deepClone } from 'vue-web-storage'
+import { deepClone } from 'vue-web-super-storage'
 
 const original = { user: { name: 'John', settings: { theme: 'dark' } } }
 const copy = deepClone(original)

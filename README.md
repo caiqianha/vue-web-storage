@@ -2,7 +2,7 @@
 
 一个轻量、支持类型、支持过期时间的 Vue 3 Web Storage 封装库。
 
-[![npm version](https://img.shields.io/npm/v/vue-web-storage.svg)](https://www.npmjs.com/package/vue-web-storage)
+[![npm version](https://img.shields.io/npm/v/vue-web-super-storage.svg)](https://www.npmjs.com/package/vue-web-super-storage)
 [![TypeScript](https://img.shields.io/badge/TypeScript-Ready-blue.svg)](https://www.typescriptlang.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3.x-green.svg)](https://vuejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -36,7 +36,7 @@ pnpm add vue-web-super-storage
 
 ```typescript
 import { createApp } from 'vue'
-import VueWebStorage from 'vue-web-storage'
+import VueWebStorage from 'vue-web-super-storage'
 import App from './App.vue'
 
 const app = createApp(App)
@@ -93,7 +93,7 @@ const saveUser = () => {
 </template>
 
 <script setup>
-import { useLocalStorage } from 'vue-web-storage'
+import { useLocalStorage } from 'vue-web-super-storage'
 
 // 响应式 localStorage，数据变化自动保存
 const [username, setUsername, removeUsername] = useLocalStorage('username', '默认用户名')
@@ -109,7 +109,7 @@ setUsername('新用户名', { expires: 24 * 60 * 60 * 1000 }) // 24小时后过�
 ### 直接使用存储类
 
 ```typescript
-import { WebStorage, StorageType } from 'vue-web-storage'
+import { WebStorage, StorageType } from 'vue-web-super-storage'
 
 // 创建 localStorage 实例
 const storage = new WebStorage({
