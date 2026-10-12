@@ -1,0 +1,35 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: vue-web-super-storage version
+      placeholder: "1.1.0"
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Vue version / browser or runtime
+      placeholder: "Vue 3.5.18, Chrome 130 / Node 20 SSR"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Code snippet or a link to a repo / StackBlitz. Mention which API you use (plugin, composable, WebStorage class).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else (console output, raw value in DevTools > Application > Storage, etc.)

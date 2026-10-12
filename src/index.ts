@@ -1,13 +1,15 @@
 /**
- * Vue Web Storage - 轻量、支持类型、支持过期时间的 Web Storage 封装库
+ * vue-web-super-storage
+ * 轻量、类型安全、支持过期时间的 Vue 3 Web Storage 封装库
  * @author caiqianha
- * @version 1.0.0
  */
 
-// 导出类型定义
+// 类型定义
 export type {
   StorageItem,
+  EncryptedEnvelope,
   StorageOptions,
+  UseStorageOptions,
   SetOptions,
   GetOptions,
   StorageStats,
@@ -18,15 +20,17 @@ export type {
 
 export { StorageType } from './types';
 
-// 导出核心类
-export { WebStorage } from './storage';
+// 核心类
+export { WebStorage, DEFAULT_PREFIX, isBrowser, resolveNativeStorage } from './storage';
 
-// 导出工具函数
+// 工具函数
 export {
   encrypt,
   decrypt,
+  decryptLegacy,
   isExpired,
   calculateExpires,
+  normalizeExpires,
   serialize,
   deserialize,
   getStorageSize,
@@ -34,38 +38,49 @@ export {
   deepClone
 } from './utils';
 
-// 导出组合式 API
+// 组合式 API
 export {
   useStorage,
   useLocalStorage,
   useSessionStorage,
   StorageState,
   createStorageState,
-  useBatchStorage
+  useBatchStorage,
+  type UseStorageReturn
 } from './composables';
 
-// 导出 Vue 插件
+// Vue 插件
 export {
   VueWebStoragePlugin,
-  type VueWebStorageOptions
+  createStorageApi,
+  useWebStorage,
+  WEB_STORAGE_KEY,
+  LOCAL_STORAGE_KEY,
+  SESSION_STORAGE_KEY,
+  type VueWebStorageOptions,
+  type StorageApi
 } from './plugin';
 
-// 默认导出插件
 export { VueWebStoragePlugin as default } from './plugin';
 
-// 创建便捷的实例
 import { WebStorage } from './storage';
 import { StorageType } from './types';
 
-export const localStorage = new WebStorage({
-  type: StorageType.LOCAL,
-  prefix: 'vue-local-'
-});
+/**
+ * 便捷实例。构造函数不会触碰 window / localStorage，
+ * 真正的访问延迟到第一次调用方法时，因此在 SSR 下 import 是安全的。
+ */
+export const local = new WebStorage({ type: StorageType.LOCAL });
+export const session = new WebStorage({ type: StorageType.SESSION });
 
-export const sessionStorage = new WebStorage({
-  type: StorageType.SESSION,
-  prefix: 'vue-session-'
-});
+/**
+ * @deprecated 与全局 localStorage 同名，容易混淆；请改用 `local`。保留以兼容 1.0.x。
+ */
+export const localStorage = local;
+/**
+ * @deprecated 与全局 sessionStorage 同名，容易混淆；请改用 `session`。保留以兼容 1.0.x。
+ */
+export const sessionStorage = session;
 
-// 版本信息
-export const version = '1.0.0';
+/** 包版本号，构建时从 package.json 注入 */
+export const version: string = typeof __VERSION__ === 'string' ? __VERSION__ : '0.0.0-dev';

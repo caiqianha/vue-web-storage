@@ -204,7 +204,7 @@ const clearForm = () => {
 
 const restoreForm = () => {
   // 强制重新从存储加载数据
-  const storage = new WebStorage({ prefix: 'vue-local-' });
+  const storage = new WebStorage();
   const savedData = storage.get<FormData>('auto-save-form');
   if (savedData) {
     formData.value = savedData;
@@ -233,7 +233,7 @@ const clearTempData = () => {
 
 // 事件监听
 const eventLog = ref<StorageEventData[]>([]);
-const storage = new WebStorage({ prefix: 'vue-local-' });
+const storage = new WebStorage();
 
 const eventListener: StorageEventListener = (data) => {
   eventLog.value.unshift(data);

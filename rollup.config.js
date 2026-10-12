@@ -1,6 +1,7 @@
 const typescript = require('@rollup/plugin-typescript');
 const { nodeResolve } = require('@rollup/plugin-node-resolve');
 const commonjs = require('@rollup/plugin-commonjs');
+const replace = require('@rollup/plugin-replace');
 const terser = require('@rollup/plugin-terser').default;
 const dts = require('rollup-plugin-dts').default;
 
@@ -11,6 +12,14 @@ const banner = `/*!
  * (c) 2025 caiqianha
  * Released under the MIT License.
  */`;
+
+const versionReplace = () =>
+  replace({
+    preventAssignment: true,
+    values: {
+      __VERSION__: JSON.stringify(pkg.version)
+    }
+  });
 
 module.exports = [
   // ES Module build
@@ -23,6 +32,7 @@ module.exports = [
       sourcemap: true
     },
     plugins: [
+      versionReplace(),
       nodeResolve(),
       commonjs(),
       typescript({
@@ -41,11 +51,13 @@ module.exports = [
       name: 'VueWebStorage',
       banner,
       sourcemap: true,
+      exports: 'named',
       globals: {
         vue: 'Vue'
       }
     },
     plugins: [
+      versionReplace(),
       nodeResolve(),
       commonjs(),
       typescript({

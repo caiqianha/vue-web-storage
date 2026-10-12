@@ -1,17 +1,81 @@
-import { App } from 'vue';
-import { WebStorage } from './storage';
-import { StorageOptions, StorageType } from './types';
+import { App, InjectionKey, inject } from 'vue';
+import { WebStorage, DEFAULT_PREFIX } from './storage';
+import { StorageOptions, StorageType, SetOptions, GetOptions, StorageStats } from './types';
 
 /**
  * Vue 插件选项
  */
 export interface VueWebStorageOptions {
-  /** localStorage 配置 */
-  localStorage?: StorageOptions;
-  /** sessionStorage 配置 */
-  sessionStorage?: StorageOptions;
-  /** 全局实例名称 */
+  /** localStorage 实例配置 */
+  localStorage?: Omit<StorageOptions, 'type'>;
+  /** sessionStorage 实例配置 */
+  sessionStorage?: Omit<StorageOptions, 'type'>;
+  /** 挂到 globalProperties 上的名字，默认 '$storage' */
   globalName?: string;
+}
+
+/**
+ * 插件注入的全局 API（即 this.$storage / inject(WEB_STORAGE_KEY)）
+ */
+export interface StorageApi {
+  local: WebStorage;
+  session: WebStorage;
+
+  setLocal: <T>(key: string, value: T, options?: SetOptions) => boolean;
+  getLocal: <T>(key: string, options?: GetOptions<T>) => T | null;
+  removeLocal: (key: string) => boolean;
+  clearLocal: () => boolean;
+
+  setSession: <T>(key: string, value: T, options?: SetOptions) => boolean;
+  getSession: <T>(key: string, options?: GetOptions<T>) => T | null;
+  removeSession: (key: string) => boolean;
+  clearSession: () => boolean;
+
+  /** 以下通用方法默认操作 localStorage 实例 */
+  set: <T>(key: string, value: T, options?: SetOptions) => boolean;
+  get: <T>(key: string, options?: GetOptions<T>) => T | null;
+  remove: (key: string) => boolean;
+  clear: () => boolean;
+  has: (key: string) => boolean;
+  keys: () => string[];
+  clearExpired: () => number;
+  getStats: () => StorageStats;
+}
+
+/** inject 用的类型安全 key：完整 API */
+export const WEB_STORAGE_KEY: InjectionKey<StorageApi> = Symbol('vue-web-super-storage:api');
+/** inject 用的类型安全 key：localStorage 实例 */
+export const LOCAL_STORAGE_KEY: InjectionKey<WebStorage> = Symbol('vue-web-super-storage:local');
+/** inject 用的类型安全 key：sessionStorage 实例 */
+export const SESSION_STORAGE_KEY: InjectionKey<WebStorage> = Symbol('vue-web-super-storage:session');
+
+/**
+ * 根据两个实例组装插件 API
+ */
+export function createStorageApi(local: WebStorage, session: WebStorage): StorageApi {
+  return {
+    local,
+    session,
+
+    setLocal: (key, value, options) => local.set(key, value, options),
+    getLocal: (key, options) => local.get(key, options),
+    removeLocal: key => local.remove(key),
+    clearLocal: () => local.clear(),
+
+    setSession: (key, value, options) => session.set(key, value, options),
+    getSession: (key, options) => session.get(key, options),
+    removeSession: key => session.remove(key),
+    clearSession: () => session.clear(),
+
+    set: (key, value, options) => local.set(key, value, options),
+    get: (key, options) => local.get(key, options),
+    remove: key => local.remove(key),
+    clear: () => local.clear(),
+    has: key => local.has(key),
+    keys: () => local.keys(),
+    clearExpired: () => local.clearExpired(),
+    getStats: () => local.getStats()
+  };
 }
 
 /**
@@ -25,82 +89,49 @@ export const VueWebStoragePlugin = {
       globalName = '$storage'
     } = options;
 
-    // 创建 localStorage 实例
-    const localStorage = new WebStorage({
-      type: StorageType.LOCAL,
-      prefix: 'vue-local-',
-      ...localOptions
+    const local = new WebStorage({
+      prefix: DEFAULT_PREFIX,
+      ...localOptions,
+      type: StorageType.LOCAL
     });
 
-    // 创建 sessionStorage 实例
-    const sessionStorage = new WebStorage({
-      type: StorageType.SESSION,
-      prefix: 'vue-session-',
-      ...sessionOptions
+    const session = new WebStorage({
+      prefix: DEFAULT_PREFIX,
+      ...sessionOptions,
+      type: StorageType.SESSION
     });
 
-    // 全局存储实例
-    const storage = {
-      local: localStorage,
-      session: sessionStorage,
-      
-      // 便捷方法
-      setLocal: localStorage.set.bind(localStorage),
-      getLocal: localStorage.get.bind(localStorage),
-      removeLocal: localStorage.remove.bind(localStorage),
-      clearLocal: localStorage.clear.bind(localStorage),
-      
-      setSession: sessionStorage.set.bind(sessionStorage),
-      getSession: sessionStorage.get.bind(sessionStorage),
-      removeSession: sessionStorage.remove.bind(sessionStorage),
-      clearSession: sessionStorage.clear.bind(sessionStorage),
-      
-      // 通用方法
-      set: localStorage.set.bind(localStorage),
-      get: localStorage.get.bind(localStorage),
-      remove: localStorage.remove.bind(localStorage),
-      clear: localStorage.clear.bind(localStorage),
-      has: localStorage.has.bind(localStorage),
-      keys: localStorage.keys.bind(localStorage),
-      clearExpired: localStorage.clearExpired.bind(localStorage),
-      getStats: localStorage.getStats.bind(localStorage)
-    };
+    const api = createStorageApi(local, session);
 
-    // 注册全局属性
-    app.config.globalProperties[globalName] = storage;
-    
-    // 提供依赖注入
-    app.provide('webStorage', storage);
-    app.provide('localStorage', localStorage);
-    app.provide('sessionStorage', sessionStorage);
+    app.config.globalProperties[globalName] = api;
+
+    // Symbol key（类型安全）
+    app.provide(WEB_STORAGE_KEY, api);
+    app.provide(LOCAL_STORAGE_KEY, local);
+    app.provide(SESSION_STORAGE_KEY, session);
+    // 1.0.x 的字符串 key，保持兼容
+    app.provide('webStorage', api);
+    app.provide('localStorage', local);
+    app.provide('sessionStorage', session);
   }
 };
 
 /**
- * 声明全局类型
+ * 在 setup 中获取插件注入的 API；未安装插件时抛出错误
  */
-declare module '@vue/runtime-core' {
+export function useWebStorage(): StorageApi {
+  const api = inject(WEB_STORAGE_KEY, null) ?? inject<StorageApi | null>('webStorage', null);
+  if (!api) {
+    throw new Error(
+      '[vue-web-super-storage] useWebStorage() called before app.use(VueWebStoragePlugin), or outside setup()'
+    );
+  }
+  return api;
+}
+
+declare module 'vue' {
   interface ComponentCustomProperties {
-    $storage: {
-      local: WebStorage;
-      session: WebStorage;
-      setLocal: <T>(key: string, value: T, options?: any) => boolean;
-      getLocal: <T>(key: string, options?: any) => T | null;
-      removeLocal: (key: string) => boolean;
-      clearLocal: () => boolean;
-      setSession: <T>(key: string, value: T, options?: any) => boolean;
-      getSession: <T>(key: string, options?: any) => T | null;
-      removeSession: (key: string) => boolean;
-      clearSession: () => boolean;
-      set: <T>(key: string, value: T, options?: any) => boolean;
-      get: <T>(key: string, options?: any) => T | null;
-      remove: (key: string) => boolean;
-      clear: () => boolean;
-      has: (key: string) => boolean;
-      keys: () => string[];
-      clearExpired: () => number;
-      getStats: () => any;
-    };
+    $storage: StorageApi;
   }
 }
 
