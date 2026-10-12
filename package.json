@@ -70,5 +70,9 @@
   "bugs": {
     "url": "https://github.com/caiqianha/vue-web-storage/issues"
   },
-  "homepage": "https://github.com/caiqianha/vue-web-storage#readme"
+  "homepage": "https://github.com/caiqianha/vue-web-storage#readme",
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  }
 }

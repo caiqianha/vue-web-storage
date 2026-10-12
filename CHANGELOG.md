@@ -3,7 +3,7 @@
 All notable changes to `vue-web-super-storage` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.1.0] - unreleased
+## [1.1.0] - 2026-10-12
 
 ### Breaking / behaviour changes
 
