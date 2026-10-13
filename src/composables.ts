@@ -1,6 +1,14 @@
-import { ref, Ref, watch, getCurrentScope, onScopeDispose } from 'vue';
+import { ref, Ref, watch, getCurrentScope, onScopeDispose, getCurrentInstance, onMounted } from 'vue';
 import { WebStorage } from './storage';
-import { StorageType, StorageOptions, SetOptions, GetOptions, UseStorageOptions } from './types';
+import { IndexedDBStorage, createIndexedDBStorage } from './indexeddb';
+import {
+  StorageType,
+  StorageOptions,
+  SetOptions,
+  GetOptions,
+  UseStorageOptions,
+  UseIndexedDBOptions
+} from './types';
 
 /**
  * useStorage 的返回值：兼容 1.0.x 的三元组，同时附带具名属性
@@ -40,7 +48,7 @@ function createStorageRef<T>(
   defaultValue: T,
   options: UseStorageOptions
 ): StorageRefController<T> {
-  const { syncAcrossTabs = true, ...storageOptions } = options;
+  const { syncAcrossTabs = true, initOnMounted = false, ...storageOptions } = options;
   const storage = new WebStorage(storageOptions);
 
   const readFromStorage = (): T => {
@@ -48,7 +56,8 @@ function createStorageRef<T>(
     return (stored ?? defaultValue) as T;
   };
 
-  const state = ref<T>(readFromStorage()) as Ref<T>;
+  // initOnMounted：先渲染默认值，挂载后再读 storage，避免 SSR 注水不匹配
+  const state = ref<T>(initOnMounted ? defaultValue : readFromStorage()) as Ref<T>;
   let lastSetOptions: SetOptions | undefined;
   let paused = false;
 
@@ -73,8 +82,9 @@ function createStorageRef<T>(
 
   const setValue = (value: T, setOptions?: SetOptions) => {
     lastSetOptions = setOptions;
-    assignSilently(value);
+    // 先写 storage：schema 校验失败会同步抛错，此时 ref 保持原值
     storage.set(key, value, setOptions);
+    assignSilently(value);
   };
 
   const remove = () => {
@@ -85,6 +95,14 @@ function createStorageRef<T>(
   const refresh = () => {
     assignSilently(readFromStorage());
   };
+
+  if (initOnMounted) {
+    if (getCurrentInstance()) {
+      onMounted(refresh);
+    } else {
+      refresh();
+    }
+  }
 
   let stopSync: (() => void) | undefined;
   if (syncAcrossTabs && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
@@ -253,4 +271,181 @@ export function useBatchStorage(options: StorageOptions = {}) {
     batchGet,
     batchRemove
   };
+}
+
+/**
+ * useIndexedDB 的返回值
+ */
+export interface UseIndexedDBReturn<T> {
+  /** 响应式数据；初始为默认值，从 IndexedDB 读取完成后更新 */
+  data: Ref<T>;
+  /** 首次读取（或读取失败）完成后变为 true。服务端始终为 false */
+  isReady: Ref<boolean>;
+  /** 最近一次读 / 写失败的错误，成功后清空 */
+  error: Ref<unknown>;
+  /** 重新从 IndexedDB 读取 */
+  refresh: () => Promise<void>;
+  /** 删除并把 ref 重置为默认值，不会再写回 */
+  remove: () => Promise<boolean>;
+  /** 立即写入（可带 expires / encrypt），后续响应式修改沿用同一组选项 */
+  setValue: (value: T, setOptions?: SetOptions) => Promise<boolean>;
+  /** 立刻把待写入的变更刷到 IndexedDB；没有待写入时 resolve true */
+  flush: () => Promise<boolean>;
+  /** 停止监听并刷出待写入的变更 */
+  stop: () => void;
+  /** 底层 IndexedDBStorage 实例 */
+  storage: IndexedDBStorage;
+}
+
+/**
+ * 与 IndexedDB 双向绑定的 ref。
+ * - 初始值为 defaultValue，异步读取完成后更新并把 isReady 置为 true；
+ * - ref 的修改（含深层）按 debounce 合并后写入；
+ * - 通过 BroadcastChannel 跟随其他标签页的修改（需要浏览器支持）；
+ * - 服务端不读取、不写入，也不会打印警告。
+ */
+export function useIndexedDB<T = any>(
+  key: string,
+  defaultValue: T,
+  options: UseIndexedDBOptions<T> & { storage?: IndexedDBStorage } = {}
+): UseIndexedDBReturn<T> {
+  const { syncAcrossTabs = true, debounce = 0, onError, storage: providedStorage, ...storageOptions } = options;
+  const storage = providedStorage ?? createIndexedDBStorage<T>(storageOptions);
+  const inBrowser = typeof window !== 'undefined';
+
+  const data = ref(defaultValue) as Ref<T>;
+  const isReady = ref(false);
+  const error = ref<unknown>(null);
+
+  let paused = false;
+  let dirty = false;
+  let writeSeq = 0;
+  let lastSetOptions: SetOptions | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  const assignSilently = (value: T) => {
+    paused = true;
+    try {
+      data.value = value;
+    } finally {
+      paused = false;
+    }
+  };
+
+  const reportError = (e: unknown) => {
+    error.value = e;
+    if (onError) onError(e);
+    else console.error('[vue-web-super-storage] useIndexedDB write error:', e);
+  };
+
+  const flush = (): Promise<boolean> => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    if (!dirty) return Promise.resolve(true);
+    dirty = false;
+    return storage.set(key, data.value, lastSetOptions).then(
+      ok => {
+        if (ok) error.value = null;
+        return ok;
+      },
+      e => {
+        reportError(e);
+        return false;
+      }
+    );
+  };
+
+  const schedule = () => {
+    writeSeq++;
+    dirty = true;
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      void flush();
+    }, debounce);
+  };
+
+  const stopWatcher = watch(
+    data,
+    () => {
+      if (paused || stopped) return;
+      schedule();
+    },
+    { deep: true, flush: 'sync' }
+  );
+
+  const refresh = async (): Promise<void> => {
+    const seq = writeSeq;
+    try {
+      const stored = await storage.get<T>(key, { defaultValue });
+      // 读取期间发生了本地写入：以本地为准，不回退
+      if (seq !== writeSeq) return;
+      assignSilently((stored ?? defaultValue) as T);
+      error.value = null;
+    } catch (e) {
+      error.value = e;
+    } finally {
+      isReady.value = true;
+    }
+  };
+
+  const setValue = (value: T, setOptions?: SetOptions): Promise<boolean> => {
+    lastSetOptions = setOptions;
+    writeSeq++;
+    assignSilently(value);
+    dirty = true;
+    return flush();
+  };
+
+  const remove = async (): Promise<boolean> => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    dirty = false;
+    writeSeq++;
+    assignSilently(defaultValue);
+    return storage.remove(key);
+  };
+
+  let unsubscribe: (() => void) | undefined;
+  if (syncAcrossTabs && inBrowser) {
+    unsubscribe = storage.subscribe(message => {
+      if (message.type === 'clear' || message.key === key) {
+        void refresh();
+      }
+    });
+  }
+
+  const onPageHide = () => {
+    void flush();
+  };
+  if (inBrowser && typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', onPageHide);
+  }
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    stopWatcher();
+    unsubscribe?.();
+    unsubscribe = undefined;
+    if (inBrowser && typeof window.removeEventListener === 'function') {
+      window.removeEventListener('pagehide', onPageHide);
+    }
+    void flush();
+  };
+
+  if (getCurrentScope()) {
+    onScopeDispose(stop);
+  }
+
+  if (inBrowser) {
+    void refresh();
+  }
+
+  return { data, isReady, error, refresh, remove, setValue, flush, stop, storage };
 }

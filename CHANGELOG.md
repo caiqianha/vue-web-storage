@@ -3,6 +3,82 @@
 All notable changes to `vue-web-super-storage` are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-10-13
+
+Fully backward compatible with 1.1.0: no option, export or on-disk format changed its meaning.
+
+### Added
+
+- **IndexedDB adapter.** `createIndexedDBStorage({ dbName, storeName, prefix, expires, encrypt, … })`
+  returns an `IndexedDBStorage` whose `get` / `set` / `remove` / `clear` / `has` / `keys` /
+  `getAll` / `clearExpired` mirror `WebStorage` but return Promises. TTL, prefix, obfuscation
+  envelope and schema / version options are shared with the sync adapters, so the stored
+  strings are identical. Built on a tiny promise wrapper over the raw IDB API (no `idb`
+  dependency); the object store is created on demand, including in an existing database.
+  `useIndexedDB(key, default, options)` returns `{ data, isReady, error, refresh, remove,
+  setValue, flush, stop, storage }`: `data` starts as the default and is hydrated
+  asynchronously (`isReady` flips afterwards), reactive edits are debounced into one write
+  (`debounce`, default `0` = next macrotask; `flush()` forces it), pending writes are flushed on
+  scope dispose and `pagehide`, and local edits made while hydration is in flight win. Cross-tab
+  sync uses a `BroadcastChannel` named `vue-web-super-storage:<dbName>:<prefix>` with a feature
+  check (`syncAcrossTabs: false` to opt out). Without IndexedDB (SSR, old browsers) every
+  adapter call is a no-op that warns once; the composable does not hydrate on the server and
+  does not warn.
+- **Schema validation.** New `schema` option on `WebStorage`, `IndexedDBStorage` and all
+  composables, accepting a [Standard Schema](https://standardschema.dev) object (zod 3.24+,
+  valibot, arktype, …) or a plain `(value) => value | throws` function. Writes are validated
+  **before** persisting and throw `StorageValidationError` synchronously (`IndexedDBStorage#set`
+  rejects); nothing is written. Reads that fail validation fall back to `defaultValue ?? null`,
+  are treated as absent by `has` / `keys` / `getAll`, leave the raw entry in place and call
+  `onInvalid(key, error)` (default: `console.warn` unless `process.env.NODE_ENV === 'production'`).
+  Validation output is what gets stored, so schema defaults / transforms apply. `schema` can
+  also be passed per call in `set` / `get` options. Asynchronous schemas are only supported by
+  the IndexedDB adapter; the sync API throws a `TypeError` for them.
+- **Versioned migrations.** `version: number` writes `v` into the envelope. On read, items
+  whose version is lower (1.1.0 data has no `v` and counts as `0`) go through `migrate(oldValue,
+  oldVersion)` or the chain `migrations: { 1: fn, 2: fn }` (`migrations[n]` upgrades `n-1 → n`;
+  missing steps are skipped; `migrations` wins if both are given), then through `schema`. The
+  migrated value is written back once with the new version (keeping TTL and obfuscation), so
+  migrations run a single time per item. A migration that throws is reported through
+  `onInvalid` and the default is returned. Items with a newer version are returned untouched.
+- **Nuxt module** at `vue-web-super-storage/nuxt` (`dist/nuxt.mjs` + `dist/nuxt.d.ts`,
+  `@nuxt/kit >= 3` as an optional peer dependency). `modules: ['vue-web-super-storage/nuxt']`
+  plus `webStorage: { prefix, expires, encrypt, encryptKey, globalName, sessionStorage, mode,
+  autoImports }` installs `VueWebStoragePlugin` through a generated plugin and auto-imports
+  `useLocalStorage`, `useSessionStorage`, `useIndexedDB` and `useWebStorage`. The plugin is
+  installed on server and client by default (`mode: 'all'`) because the Vue plugin is SSR-safe
+  and `useWebStorage()` would otherwise throw during SSR; `mode: 'client'` is available.
+- **`initOnMounted` option** for `useStorage` / `useLocalStorage` / `useSessionStorage` /
+  `StorageState`: the ref holds the default value during setup and reads storage in
+  `onMounted`, so server and client render the same first frame. Outside a component it reads
+  immediately. Off by default (unchanged behaviour).
+- New exports: `IndexedDBStorage`, `createIndexedDBStorage`, `useIndexedDB`, `hasIndexedDB`,
+  `hasBroadcastChannel`, `indexedDBChannelName`, `DEFAULT_DB_NAME`, `DEFAULT_STORE_NAME`,
+  `DEFAULT_ENCRYPT_KEY`, `StorageValidationError`, `validateSync`, `validateAsync`,
+  `runMigrations`; types `StandardSchemaV1`, `StandardSchemaIssue`, `StandardSchemaResult`,
+  `SchemaValidator`, `StorageSchema`, `MigrateFn`, `OnInvalidHook`, `SchemaOptions`,
+  `IndexedDBOptions`, `UseIndexedDBOptions`, `UseIndexedDBReturn`, `IndexedDBBroadcastMessage`,
+  `ResolvedStorageOptions`, `ResolvedIndexedDBOptions`.
+- `package.json`: `exports["./nuxt"]`, `typesVersions`, `peerDependenciesMeta`
+  (`@nuxt/kit` optional). Dev dependencies: `fake-indexeddb` (test setup only), `@nuxt/kit`,
+  `@nuxt/schema`, `zod` (one interop test).
+
+### Changed
+
+- `useStorage().setValue()` writes to storage **before** updating the ref, so a failed schema
+  validation leaves the ref untouched. Without a schema nothing observable changes (the write
+  was already synchronous).
+- `WebStorage#getOptions()` is typed as `ResolvedStorageOptions` (schema-related fields stay
+  optional) instead of `Required<StorageOptions>`.
+- `StorageItem` gains the optional `v` field.
+
+### Compatibility notes
+
+- 1.2.0 reads every format 1.0.x and 1.1.0 wrote. Without `version` / `schema` it writes the
+  exact 1.1.0 envelope. With `version` set, the envelope gains `v`, which 1.1.0 ignores, so even
+  that data remains readable by 1.1.0.
+- `StorageOptions` now extends `SchemaOptions`; all new fields are optional.
+
 ## [1.1.0] - 2026-10-12
 
 ### Breaking / behaviour changes

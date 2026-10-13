@@ -15,13 +15,48 @@ export type {
   StorageStats,
   StorageEventType,
   StorageEventData,
-  StorageEventListener
+  StorageEventListener,
+  // 1.2.0: schema / 版本迁移
+  StandardSchemaV1,
+  StandardSchemaIssue,
+  StandardSchemaResult,
+  SchemaValidator,
+  StorageSchema,
+  MigrateFn,
+  OnInvalidHook,
+  SchemaOptions,
+  // 1.2.0: IndexedDB
+  IndexedDBOptions,
+  UseIndexedDBOptions,
+  IndexedDBBroadcastMessage
 } from './types';
 
 export { StorageType } from './types';
 
 // 核心类
-export { WebStorage, DEFAULT_PREFIX, isBrowser, resolveNativeStorage } from './storage';
+export {
+  WebStorage,
+  DEFAULT_PREFIX,
+  DEFAULT_ENCRYPT_KEY,
+  isBrowser,
+  resolveNativeStorage,
+  type ResolvedStorageOptions
+} from './storage';
+
+// IndexedDB 适配器
+export {
+  IndexedDBStorage,
+  createIndexedDBStorage,
+  hasIndexedDB,
+  hasBroadcastChannel,
+  indexedDBChannelName,
+  DEFAULT_DB_NAME,
+  DEFAULT_STORE_NAME,
+  type ResolvedIndexedDBOptions
+} from './indexeddb';
+
+// schema 校验 / 迁移
+export { StorageValidationError, validateSync, validateAsync, runMigrations } from './schema';
 
 // 工具函数
 export {
@@ -43,10 +78,12 @@ export {
   useStorage,
   useLocalStorage,
   useSessionStorage,
+  useIndexedDB,
   StorageState,
   createStorageState,
   useBatchStorage,
-  type UseStorageReturn
+  type UseStorageReturn,
+  type UseIndexedDBReturn
 } from './composables';
 
 // Vue 插件

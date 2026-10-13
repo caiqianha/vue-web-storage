@@ -2,25 +2,23 @@ import {
   StorageType,
   StorageItem,
   StorageOptions,
+  SchemaOptions,
   SetOptions,
   GetOptions,
   StorageStats,
   StorageEventType,
   StorageEventData,
-  StorageEventListener,
-  EncryptedEnvelope
+  StorageEventListener
 } from './types';
-import {
-  isExpired,
-  calculateExpires,
-  normalizeExpires,
-  encrypt,
-  decryptStrict,
-  decryptLegacy
-} from './utils';
+import { isExpired, calculateExpires, normalizeExpires } from './utils';
+import { decodeItem, encodeItem, buildItem, itemVersion } from './codec';
+import { normalizeVersion, prepareReadSync, validateSync } from './schema';
 
 export const DEFAULT_PREFIX = 'vue-storage-';
-const DEFAULT_ENCRYPT_KEY = 'vue-web-storage';
+export const DEFAULT_ENCRYPT_KEY = 'vue-web-storage';
+
+/** 实例内部使用的已解析配置：schema 相关字段保持可选 */
+export type ResolvedStorageOptions = Required<Omit<StorageOptions, keyof SchemaOptions>> & SchemaOptions;
 
 /** 已经做过首次过期清理的 (type, prefix) 组合，整页生命周期内只清理一次 */
 const cleanedScopes = new Set<string>();
@@ -45,33 +43,12 @@ export function resolveNativeStorage(type: StorageType): Storage | null {
   }
 }
 
-function isEncryptedEnvelope(value: unknown): value is EncryptedEnvelope {
-  return (
-    !!value &&
-    typeof value === 'object' &&
-    (value as EncryptedEnvelope).encrypted === true &&
-    typeof (value as EncryptedEnvelope).data === 'string'
-  );
-}
-
-function isStorageItem(value: unknown): value is StorageItem {
-  return !!value && typeof value === 'object' && 'value' in (value as object) && 'expires' in (value as object);
-}
-
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * WebStorage 封装类
  */
 export class WebStorage {
   private nativeStorage: Storage | null | undefined;
-  private readonly options: Required<StorageOptions>;
+  private readonly options: ResolvedStorageOptions;
   private readonly listeners: Map<StorageEventType, Set<StorageEventListener>> = new Map();
   private initialized = false;
 
@@ -89,6 +66,7 @@ export class WebStorage {
 
     normalizeExpires(this.options.defaultExpires, 'defaultExpires');
     normalizeExpires(this.options.cleanupInterval, 'cleanupInterval');
+    normalizeVersion(this.options.version);
     // 构造函数不触碰 window / localStorage，SSR 下可安全实例化
   }
 
@@ -154,67 +132,63 @@ export class WebStorage {
   }
 
   /**
-   * 把存储的原始字符串解析为 StorageItem。
-   * 支持三种格式：明文 JSON、带 encrypted 标记的信封、1.0.x 的无标记混淆串。
+   * 把存储的原始字符串解析为 StorageItem（不做迁移 / 校验）
    */
   private decode<T>(raw: string): StorageItem<T> | null {
-    const parsed = parseJson(raw);
-
-    if (isEncryptedEnvelope(parsed)) {
-      return decodeObfuscated<T>(parsed.data, this.options.encryptKey);
-    }
-
-    if (isStorageItem(parsed)) {
-      return parsed as StorageItem<T>;
-    }
-
-    // 旧版（1.0.x）数据：整串就是混淆后的 Base64，无任何标记
-    return decodeObfuscated<T>(raw, this.options.encryptKey);
-  }
-
-  private encode(item: StorageItem, shouldEncrypt: boolean): string {
-    const json = JSON.stringify(item);
-    if (!shouldEncrypt) return json;
-    const envelope: EncryptedEnvelope = {
-      vws: 1,
-      encrypted: true,
-      data: encrypt(json, this.options.encryptKey)
-    };
-    return JSON.stringify(envelope);
+    return decodeItem<T>(raw, this.options.encryptKey)?.item ?? null;
   }
 
   /**
-   * 读取并解析一个完整 key，过期则删除。返回 null 表示不存在 / 已过期 / 无法解析。
+   * 读取并解析一个完整 key：过期则删除；版本落后则迁移并写回；配置了 schema 则校验。
+   * 返回 null 表示不存在 / 已过期 / 无法解析 / 校验失败。
    */
-  private readItem<T>(fullKey: string, storage: Storage): StorageItem<T> | null {
+  private readItem<T>(fullKey: string, storage: Storage, schemaOverride?: GetOptions<T>['schema']): StorageItem<T> | null {
     const raw = storage.getItem(fullKey);
     if (raw === null) return null;
-    const item = this.decode<T>(raw);
-    if (!item) return null;
+    const decoded = decodeItem<T>(raw, this.options.encryptKey);
+    if (!decoded) return null;
+    const { item, encrypted } = decoded;
+    const key = fullKey.substring(this.options.prefix.length);
     if (isExpired(item.expires)) {
       storage.removeItem(fullKey);
-      this.emit('expired', { key: fullKey.substring(this.options.prefix.length) });
+      this.emit('expired', { key });
       return null;
     }
-    return item;
+
+    const storedVersion = itemVersion(item);
+    const hasPipeline = schemaOverride || this.options.schema || this.options.version !== undefined;
+    if (!hasPipeline) return item;
+
+    const result = prepareReadSync<T>(item.value, storedVersion, key, this.options, schemaOverride);
+    if (!result.ok) return null;
+
+    const processed: StorageItem<T> = { ...item, value: result.value };
+    if (result.migrated) {
+      processed.v = this.options.version;
+      try {
+        storage.setItem(fullKey, encodeItem(processed, encrypted, this.options.encryptKey));
+      } catch (error) {
+        console.error('[vue-web-super-storage] failed to persist migrated value:', error);
+      }
+    }
+    return processed;
   }
 
   /**
-   * 设置存储项。expires 非法时抛出 TypeError；写入失败（配额、非浏览器环境等）返回 false。
+   * 设置存储项。expires 非法时抛出 TypeError；配置了 schema 且校验失败时抛出 StorageValidationError；
+   * 写入失败（配额、非浏览器环境等）返回 false。
    */
   set<T = any>(key: string, value: T, options: SetOptions = {}): boolean {
     const expires = calculateExpires(options.expires ?? this.options.defaultExpires);
+    const schema = options.schema ?? this.options.schema;
+    const toStore = schema ? validateSync<T>(schema, value, key) : value;
     const storage = this.resolve();
     if (!storage) return false;
     try {
-      const item: StorageItem<T> = {
-        value,
-        expires,
-        created: Date.now()
-      };
+      const item = buildItem(toStore, expires, this.options.version);
       const shouldEncrypt = options.encrypt ?? this.options.encrypt;
-      storage.setItem(this.getFullKey(key), this.encode(item, shouldEncrypt));
-      this.emit('set', { key, value });
+      storage.setItem(this.getFullKey(key), encodeItem(item, shouldEncrypt, this.options.encryptKey));
+      this.emit('set', { key, value: toStore });
       return true;
     } catch (error) {
       console.error('[vue-web-super-storage] set error:', error);
@@ -223,14 +197,14 @@ export class WebStorage {
   }
 
   /**
-   * 获取存储项；不存在、已过期或无法解析时返回 defaultValue ?? null
+   * 获取存储项；不存在、已过期、无法解析或校验失败时返回 defaultValue ?? null
    */
   get<T = any>(key: string, options: GetOptions<T> = {}): T | null {
     const fallback = (options.defaultValue ?? null) as T | null;
     const storage = this.resolve();
     if (!storage) return fallback;
     try {
-      const item = this.readItem<T>(this.getFullKey(key), storage);
+      const item = this.readItem<T>(this.getFullKey(key), storage, options.schema);
       if (!item) return fallback;
       this.emit('get', { key, value: item.value });
       return item.value;
@@ -241,7 +215,7 @@ export class WebStorage {
   }
 
   /**
-   * 检查存储项是否存在且未过期
+   * 检查存储项是否存在且未过期（配置了 schema 时还需通过校验）
    */
   has(key: string): boolean {
     const storage = this.resolve();
@@ -432,25 +406,9 @@ export class WebStorage {
   /**
    * 获取配置选项
    */
-  getOptions(): Readonly<Required<StorageOptions>> {
+  getOptions(): Readonly<ResolvedStorageOptions> {
     return { ...this.options };
   }
-}
-
-/**
- * 先按新方案（UTF-8 字节 XOR）解码，解不出合法 StorageItem 时再按旧方案解码
- */
-function decodeObfuscated<T>(data: string, key: string): StorageItem<T> | null {
-  const attempts: Array<() => string> = [() => decryptStrict(data, key), () => decryptLegacy(data, key)];
-  for (const attempt of attempts) {
-    try {
-      const item = parseJson(attempt());
-      if (isStorageItem(item)) return item as StorageItem<T>;
-    } catch {
-      // 尝试下一种方案
-    }
-  }
-  return null;
 }
 
 function stripUndefined<T extends object>(obj: T): Partial<T> {

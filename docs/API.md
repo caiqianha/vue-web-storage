@@ -8,6 +8,9 @@
   - [WebStorage](#webstorage)
   - [StorageState](#storagestate)
 - [组合式 API](#组合式-api)
+- [schema 校验与版本迁移](#schema-校验与版本迁移)
+- [IndexedDB 适配器](#indexeddb-适配器)
+- [Nuxt 模块](#nuxt-模块)
 - [Vue 插件](#vue-插件)
 - [便捷实例与版本号](#便捷实例与版本号)
 - [类型定义](#类型定义)
@@ -36,6 +39,10 @@ new WebStorage(options?: StorageOptions)
 | `encryptKey` | `string` | `'vue-web-storage'` | 混淆密钥 |
 | `autoCleanup` | `boolean` | `true` | 首次访问时清理一次过期项（每个 `(type, prefix)` 每次页面加载只做一次） |
 | `cleanupInterval` | `number` | `0` | 定时清理间隔（毫秒），`0` 不开启；同一 `(type, prefix)` 只会有一个定时器 |
+| `schema` | `StorageSchema` | — | （1.2.0）读写校验，见 [schema 校验与版本迁移](#schema-校验与版本迁移) |
+| `version` | `number` | — | （1.2.0）当前数据结构版本（非负整数），写入信封 `v` 字段 |
+| `migrate` / `migrations` | 函数 / `Record<number, 函数>` | — | （1.2.0）版本落后时的迁移逻辑 |
+| `onInvalid` | `(key, error) => void` | 非 production 下 `console.warn` | （1.2.0）读到无效数据时的回调 |
 
 构造函数不会访问 `window` / `localStorage`，因此在 SSR 下可以安全实例化。
 
@@ -218,6 +225,132 @@ batchGet<string>(['username', 'theme', 'missing']) // { username: 'John', theme:
 batchRemove(['username'])
 ```
 
+## schema 校验与版本迁移
+
+1.2.0 起 `WebStorage`、`IndexedDBStorage` 与所有组合式函数共用一组选项（`SchemaOptions`）：
+
+```ts
+interface SchemaOptions<T = any> {
+  schema?: StorageSchema<T>                         // Standard Schema 对象或 (value) => T
+  version?: number                                  // 当前版本，非负整数
+  migrate?: (oldValue: any, oldVersion: number) => T
+  migrations?: Record<number, (oldValue: any, fromVersion: number) => any>
+  onInvalid?: (key: string, error: unknown) => void
+}
+```
+
+- `StorageSchema` 接受任何带 `~standard.validate` 的对象（zod 3.24+ / valibot / arktype 等实现了
+  [Standard Schema](https://standardschema.dev) 的库），或一个返回规范化值 / 抛错的普通函数。
+- **写入**：`set` / `setValue` 在落盘前校验，失败同步抛出 `StorageValidationError`
+  （`IndexedDBStorage#set` 为 reject），不会写入；校验的输出就是落盘的值。
+- **读取**：解码 → 过期检查 → （版本落后时）迁移 → 校验。迁移或校验失败时返回
+  `defaultValue ?? null`，`has` / `keys` / `getAll` 视为不存在，原始数据不删除，触发 `onInvalid`。
+- **迁移**：存储项的版本是 `v` 字段，1.1.0 及更早的数据没有 `v`，按 `0` 处理。
+  `migrations[n]` 把 `n-1` 版本升级到 `n`，从 `oldVersion + 1` 依次执行到 `version`，缺失的步骤跳过；
+  没有 `migrations` 时调用一次 `migrate(oldValue, oldVersion)`。迁移结果带新版本号写回（保留
+  `expires` 与混淆方式），因此每条数据只迁移一次。版本号高于 `version` 的数据原样返回。
+- `set` / `get` 的选项里也可以传 `schema`，只对本次调用生效并覆盖实例级配置。
+- 同步 API 不支持返回 Promise 的 schema（抛 `TypeError`），IndexedDB 适配器支持。
+
+```ts
+class StorageValidationError extends Error {
+  key: string                                  // 出错的 key（不含前缀）
+  issues: ReadonlyArray<StandardSchemaIssue>   // Standard Schema 的问题列表，函数式校验器为 []
+  cause?: unknown                              // 校验函数抛出的原始错误
+}
+```
+
+另外导出 `validateSync(schema, value, key)`、`validateAsync(schema, value, key)`、
+`runMigrations(value, storedVersion, options)` 供自定义适配器复用。
+
+## IndexedDB 适配器
+
+### createIndexedDBStorage(options?) / IndexedDBStorage
+
+```ts
+interface IndexedDBOptions<T = any> extends SchemaOptions<T> {
+  dbName?: string        // 默认 'vue-web-super-storage'
+  storeName?: string     // 默认 'keyval'
+  prefix?: string        // 默认 'vue-storage-'
+  expires?: number       // 默认过期时间（毫秒），别名 defaultExpires
+  encrypt?: boolean
+  encryptKey?: string
+  broadcast?: boolean    // 写入后通过 BroadcastChannel 通知，默认 true
+}
+```
+
+所有方法返回 Promise，语义与 `WebStorage` 一致：
+
+| 方法 | 说明 |
+| --- | --- |
+| `set(key, value, { expires, encrypt, schema })` | 成功 `true`；不可用 / 失败 `false`；TTL 非法 reject `TypeError`；校验失败 reject `StorageValidationError` |
+| `get(key, { defaultValue, schema })` | 不存在 / 过期 / 校验失败返回 `defaultValue ?? null` |
+| `has(key)` / `remove(key)` / `clear()` | 同 `WebStorage` |
+| `keys()` / `getAll()` / `clearExpired()` | 同 `WebStorage` |
+| `on(type, listener)` / `off(type, listener)` | 事件：`set` / `get` / `remove` / `clear` / `expired` |
+| `subscribe(listener)` | 订阅其他标签页（或同页其他实例）的 `{ type: 'set' \| 'remove' \| 'clear', key? }` 通知，返回取消函数 |
+| `isAvailable()` / `channelName` / `getFullKey(key)` / `getOptions()` / `close()` | 工具方法；`destroy()` 是 `close()` 的别名 |
+
+落盘的字符串与 `WebStorage` 完全相同（见 [存储格式](#存储格式)），对象仓库在首次访问时创建，
+已有数据库缺少该仓库时自动升级版本号补建。广播频道名由 `indexedDBChannelName(dbName, prefix)`
+生成：`vue-web-super-storage:<dbName>:<prefix>`。
+
+没有 `indexedDB` 的环境（SSR、受限浏览器）：所有方法返回与 `WebStorage` 无 DOM 时相同的空值，
+并在首次调用时 `console.warn` 一次。
+
+### useIndexedDB\<T\>(key, defaultValue, options?)
+
+```ts
+interface UseIndexedDBOptions<T> extends IndexedDBOptions<T> {
+  syncAcrossTabs?: boolean          // 默认 true
+  debounce?: number                 // ref 变化后延迟多少毫秒写入，默认 0
+  onError?: (error: unknown) => void
+  storage?: IndexedDBStorage        // 复用已有实例
+}
+
+interface UseIndexedDBReturn<T> {
+  data: Ref<T>            // 初始为 defaultValue，读取完成后更新
+  isReady: Ref<boolean>   // 首次读取（含失败）完成后为 true；服务端始终 false
+  error: Ref<unknown>     // 最近一次读写错误，成功后清空
+  refresh: () => Promise<void>
+  remove: () => Promise<boolean>                           // 删除并重置为默认值，不写回
+  setValue: (value: T, setOptions?: SetOptions) => Promise<boolean>  // 立即写入，选项沿用
+  flush: () => Promise<boolean>                            // 立刻写出待写入的变更
+  stop: () => void                                         // 停止监听并 flush
+  storage: IndexedDBStorage
+}
+```
+
+- 对 `data` 的修改（含深层）按 `debounce` 合并为一次写入；`setValue` 立即写入；写入失败时设置
+  `error` 并调用 `onError`（未提供时 `console.error`）。
+- 首次读取期间发生的本地修改优先，不会被读取结果覆盖。
+- 作用域销毁（`onScopeDispose`）与 `pagehide` 时自动 `flush`。
+- 服务端（无 `window`）不读取、不写入、不警告。
+
+## Nuxt 模块
+
+入口 `vue-web-super-storage/nuxt`（`dist/nuxt.mjs` + `dist/nuxt.d.ts`），需要 `@nuxt/kit >= 3`
+（可选 peerDependency）。
+
+```ts
+export default defineNuxtConfig({
+  modules: ['vue-web-super-storage/nuxt'],
+  webStorage: {
+    prefix: 'vue-storage-',   // localStorage / sessionStorage 共用前缀
+    expires: 0,               // 默认过期时间（毫秒）
+    encrypt: false,
+    encryptKey: undefined,
+    globalName: '$storage',
+    sessionStorage: { prefix: undefined, expires: undefined, encrypt: undefined, encryptKey: undefined },
+    mode: 'all',              // 'all'（默认，服务端客户端都安装）或 'client'
+    autoImports: true         // 自动导入 useLocalStorage / useSessionStorage / useIndexedDB / useWebStorage
+  }
+})
+```
+
+模块生成一个 Nuxt 插件，用上述选项调用 `app.use(VueWebStoragePlugin, …)`。Vue 插件本身是 SSR
+安全的，默认在服务端也安装，这样 `useWebStorage()` / `this.$storage` 在 SSR 期间不会抛错。
+
 ## Vue 插件
 
 ### 安装
@@ -306,7 +439,7 @@ version                // 与 package.json 一致，构建时注入
 ```ts
 enum StorageType { LOCAL = 'localStorage', SESSION = 'sessionStorage' }
 
-interface StorageOptions {
+interface StorageOptions extends SchemaOptions {
   type?: StorageType
   defaultExpires?: number
   prefix?: string
@@ -318,12 +451,13 @@ interface StorageOptions {
 
 interface UseStorageOptions extends StorageOptions {
   syncAcrossTabs?: boolean
+  initOnMounted?: boolean   // 1.2.0：setup 阶段保持默认值，onMounted 后再读 storage（SSR 友好）
 }
 
-interface SetOptions { expires?: number; encrypt?: boolean }
-interface GetOptions<T = any> { defaultValue?: T }
+interface SetOptions { expires?: number; encrypt?: boolean; schema?: StorageSchema }
+interface GetOptions<T = any> { defaultValue?: T; schema?: StorageSchema<T> }
 
-interface StorageItem<T = any> { value: T; expires: number | null; created: number }
+interface StorageItem<T = any> { value: T; expires: number | null; created: number; v?: number }
 interface EncryptedEnvelope { vws: 1; encrypted: true; data: string }
 
 interface StorageStats { total: number; expired: number; valid: number; usedBytes: number }
@@ -362,8 +496,8 @@ type UseStorageReturn<T> = [Ref<T>, (value: T, setOptions?: SetOptions) => void,
 每个 key 在原生 storage 中存一条字符串：
 
 ```jsonc
-// 明文项
-{"value":{"name":"John"},"expires":1735689600000,"created":1735603200000}
+// 明文项（配置了 version 时多一个 v 字段，1.1.0 读取时会忽略它）
+{"value":{"name":"John"},"expires":1735689600000,"created":1735603200000,"v":2}
 
 // 混淆项（实例级或单项级 encrypt）
 {"vws":1,"encrypted":true,"data":"<base64>"}   // data 解码后即上面的明文项
@@ -371,9 +505,16 @@ type UseStorageReturn<T> = [Ref<T>, (value: T, setOptions?: SetOptions) => void,
 
 1.0.x 写出的混淆项没有外层信封（整串是 Base64）。1.1.0 读取时会依次尝试：JSON 明文 → 带标记的信封 → 旧格式新算法 → 旧格式旧算法，因此旧数据无需迁移；但 1.1.0 写出的混淆项 1.0.x 读不了。
 
+IndexedDB 适配器把同样的字符串存进对象仓库（out-of-line key = 前缀 + key），所以两种后端的 TTL、
+混淆与版本迁移逻辑完全共用。
+
 ## SSR 行为
 
 - import 本库不会访问 `window` / `localStorage`
 - `new WebStorage()`、`useStorage()`、`createStorageState()` 在服务端可以正常调用
 - 没有 DOM 时：`set` / `remove` / `clear` 返回 `false`，`get` 返回 `defaultValue ?? null`，`has` 返回 `false`，`keys()` 返回 `[]`，`getStorage()` 返回 `null`，`clearExpired()` 返回 `0`
 - 组合式 API 的 ref 在服务端保持默认值，不会注册 `storage` 事件监听
+- `initOnMounted: true` 让客户端首帧也渲染默认值，`onMounted` 后再读取，避免注水不匹配
+- `useIndexedDB` 在服务端不读取、不写入、不警告，`isReady` 保持 `false`；`IndexedDBStorage`
+  的方法在没有 `indexedDB` 时返回空值并只警告一次
+- Nuxt 模块默认在服务端也安装插件（所有调用为空操作），`useWebStorage()` 在 SSR 期间可用

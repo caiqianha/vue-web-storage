@@ -1,6 +1,6 @@
 # vue-web-super-storage
 
-> Typed `localStorage` / `sessionStorage` for Vue 3 with per-key TTL, namespaces, optional obfuscation, cross-tab sync, and three ways to use it: plugin, composable, or plain class.
+> Typed `localStorage` / `sessionStorage` / IndexedDB for Vue 3 and Nuxt with per-key TTL, namespaces, schema validation, versioned migrations, optional obfuscation, cross-tab sync, and three ways to use it: plugin, composable, or plain class.
 
 [![npm version](https://img.shields.io/npm/v/vue-web-super-storage.svg)](https://www.npmjs.com/package/vue-web-super-storage)
 [![CI](https://github.com/caiqianha/vue-web-storage/actions/workflows/test.yml/badge.svg)](https://github.com/caiqianha/vue-web-storage/actions/workflows/test.yml)
@@ -28,7 +28,16 @@ set of needs that usually end up as hand-written helpers:
 - **Cross-tab sync** – composable refs follow changes made in other tabs.
 - **Typed end to end** – generics on `get`/`set`, `InjectionKey`s for `inject`, typed `$storage`.
 - **SSR safe** – importing on the server does not touch `window`; calls become harmless no-ops.
-- Zero runtime dependencies, Vue 3 is a peer dependency.
+  `initOnMounted` / `isReady` keep the first client render identical to the server one.
+- **Schema validation** (1.2.0) – pass a [Standard Schema](https://standardschema.dev) (zod,
+  valibot, arktype) or a plain function; bad writes throw, bad reads fall back to the default.
+- **Versioned migrations** (1.2.0) – `version` + `migrate` / `migrations` upgrade old data once,
+  on read, and write the result back.
+- **IndexedDB** (1.2.0) – `createIndexedDBStorage()` and `useIndexedDB()` with the same TTL /
+  prefix / obfuscation / schema model, async API, debounced writes and `BroadcastChannel` sync.
+- **Nuxt module** (1.2.0) – `modules: ['vue-web-super-storage/nuxt']` installs the plugin and
+  auto-imports the composables.
+- Zero runtime dependencies, Vue 3 is a peer dependency (`@nuxt/kit` only if you use the module).
 
 ## Install
 
@@ -113,6 +122,15 @@ Importing the library on the server is safe. Without a DOM, writes return `false
 `defaultValue ?? null` and `getStorage()` returns `null`. Composables simply hold the default
 value until they run in the browser.
 
+To avoid hydration mismatches, make the first client render identical to the server one:
+
+- `useLocalStorage(key, default, { initOnMounted: true })` keeps `default` during setup and
+  reads storage in `onMounted` (outside a component it reads immediately).
+- `useIndexedDB` is always asynchronous: render from `data` and gate anything that must not flash
+  behind `isReady` (`<p v-if="isReady">…</p>`). On the server `isReady` stays `false`.
+- With the Nuxt module the plugin is installed on both sides, so `useWebStorage()` / `$storage`
+  are available during SSR (all server calls are no-ops).
+
 ### Browser support
 
 The build targets **ES2020** and depends on Vue 3, which means Chrome / Edge 80+, Firefox 74+,
@@ -123,6 +141,111 @@ Safari 13.1+ and any evergreen browser. Internet Explorer is not supported (neit
 1.1.0 keeps the 1.0 API but changes a few behaviours (default prefix for the plugin, real
 removal in composables, TTL validation, new obfuscation format that still reads old data).
 See [CHANGELOG.md](CHANGELOG.md) for the list and migration notes.
+
+### Upgrading from 1.1.0
+
+1.2.0 is additive. Data written by 1.1.0 is read as-is; without `version` / `schema` the
+on-disk format is unchanged. See [CHANGELOG.md](CHANGELOG.md).
+
+## Schema validation and versioned migrations (1.2.0)
+
+Every adapter and composable accepts `schema`, `version`, `migrate` / `migrations` and
+`onInvalid`:
+
+```ts
+import { z } from 'zod'                       // or valibot / arktype / a plain function
+import { useLocalStorage, WebStorage, StorageValidationError } from 'vue-web-super-storage'
+
+const Settings = z.object({ theme: z.enum(['light', 'dark']), fontSize: z.number().default(14) })
+
+const [settings] = useLocalStorage('settings', { theme: 'light', fontSize: 14 }, {
+  schema: Settings,
+  version: 2,
+  migrations: {
+    1: old => ({ theme: old.dark ? 'dark' : 'light' }),  // v0 (1.1.0 data, no `v`) -> v1
+    2: old => ({ ...old, fontSize: 14 })                 // v1 -> v2
+  },
+  onInvalid: (key, error) => console.warn(key, error)   // default: console.warn outside production
+})
+
+// Plain function schema: return the (normalised) value or throw
+const names = new WebStorage({ schema: v => { if (typeof v !== 'string') throw new Error('string expected'); return v.trim() } })
+
+try {
+  names.set('user', 42)                       // validated BEFORE persisting
+} catch (e) {
+  e instanceof StorageValidationError          // key, issues, cause
+}
+```
+
+Rules:
+
+- **Writes throw.** `set` / `setValue` validate first and throw `StorageValidationError`
+  synchronously (the IndexedDB adapter rejects); nothing is written. Assigning an invalid
+  value to a composable ref surfaces the error through Vue's error handling and skips the write.
+- **Reads fall back.** Invalid stored data returns `defaultValue ?? null`, is treated as absent
+  by `has` / `keys` / `getAll`, is left in storage untouched, and triggers `onInvalid`.
+- **Migrations run once.** Items with `v` lower than `version` (1.1.0 data counts as `0`) are
+  migrated, validated, then written back with the new version, keeping TTL and obfuscation.
+  `migrations[n]` upgrades `n-1 → n`; missing steps are skipped; a single `migrate(old, from)`
+  is the alternative. Items with a newer version are returned untouched.
+- Schema output is what gets stored, so zod defaults / transforms apply. Async schemas work only
+  with the IndexedDB adapter.
+
+## IndexedDB (1.2.0)
+
+Same mental model, Promise-based API, no `idb` dependency:
+
+```ts
+import { createIndexedDBStorage, useIndexedDB } from 'vue-web-super-storage'
+
+const db = createIndexedDBStorage({ dbName: 'my-app', storeName: 'keyval', prefix: 'cache-', expires: 3600_000, encrypt: false })
+await db.set('profile', { id: 1 }, { expires: 60_000 })
+await db.get<{ id: number }>('profile')     // null when missing / expired / invalid
+await db.has('profile'); await db.keys(); await db.getAll(); await db.remove('profile'); await db.clear()
+
+// composable: hydrated asynchronously, writes debounced, synced across tabs via BroadcastChannel
+const { data, isReady, error, refresh, remove, setValue, flush } = useIndexedDB<string[]>('notes', [], {
+  dbName: 'my-app',
+  debounce: 50,                 // ms between the last edit and the write (default 0)
+  syncAcrossTabs: true          // BroadcastChannel 'vue-web-super-storage:<dbName>:<prefix>'
+})
+data.value.push('hello')        // flushed after `debounce`, or immediately with `await flush()`
+await setValue(['a'], { expires: 60_000 })
+```
+
+`data` starts as the default; `isReady` flips after the first read. Local edits made while the
+first read is in flight are kept. Pending writes are flushed on scope dispose and `pagehide`.
+Without IndexedDB (SSR, locked-down browsers) adapter calls resolve to no-op values and warn
+once; the composable neither hydrates nor warns on the server.
+
+## Nuxt (1.2.0)
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['vue-web-super-storage/nuxt'],
+  webStorage: {
+    prefix: 'my-app-',
+    expires: 7 * 24 * 3600_000,
+    encrypt: false,
+    sessionStorage: { prefix: 'my-session-' },   // optional overrides
+    mode: 'all',                                  // 'client' to install only in the browser
+    autoImports: true
+  }
+})
+```
+
+```vue
+<script setup lang="ts">
+// auto-imported: useLocalStorage, useSessionStorage, useIndexedDB, useWebStorage
+const [theme] = useLocalStorage('theme', 'light', { initOnMounted: true })
+const { data: notes, isReady } = useIndexedDB<string[]>('notes', [])
+const storage = useWebStorage()   // plugin is installed on server and client; server calls are no-ops
+</script>
+```
+
+`@nuxt/kit >= 3` is an optional peer dependency and is only needed when the module is used.
 
 ---
 
@@ -143,8 +266,12 @@ See [CHANGELOG.md](CHANGELOG.md) for the list and migration notes.
 - 插件、组合式 API、原生类三种用法共享同一套默认前缀
 - 组合式 API 自动跨标签页同步
 - 事件监听（set / get / remove / clear / expired）与统计信息
-- SSR 下 import 和调用都安全，不会访问 `window`
-- 无运行时依赖，Vue 3 为 peerDependency
+- SSR 下 import 和调用都安全，不会访问 `window`；`initOnMounted` / `isReady` 避免注水不匹配
+- （1.2.0）schema 校验：支持 [Standard Schema](https://standardschema.dev)（zod / valibot / arktype）或普通函数，写入不合法抛错，读到不合法回退默认值
+- （1.2.0）版本迁移：`version` + `migrate` / `migrations`，读取时迁移一次并写回
+- （1.2.0）IndexedDB 适配器：`createIndexedDBStorage()` / `useIndexedDB()`，同一套 TTL / 前缀 / 混淆 / schema 模型，Promise API，合并写入，`BroadcastChannel` 跨标签页同步
+- （1.2.0）Nuxt 模块：`modules: ['vue-web-super-storage/nuxt']` 自动安装插件并自动导入组合式函数
+- 无运行时依赖，Vue 3 为 peerDependency（只有用 Nuxt 模块时才需要 `@nuxt/kit`）
 
 ## 安装
 
@@ -252,6 +379,103 @@ storage.clear()
   不支持 IE。
 - **从 1.0.x 升级**：API 兼容，但插件默认前缀、组合式 API 的删除语义、TTL 校验、混淆格式
   有变化（新版本可读旧数据，反之不行），详见 [CHANGELOG.md](CHANGELOG.md)。
+
+## schema 校验与版本迁移（1.2.0）
+
+所有适配器和组合式函数都接受 `schema`、`version`、`migrate` / `migrations`、`onInvalid`：
+
+```ts
+import { z } from 'zod'   // 也可以用 valibot / arktype，或者一个普通函数
+import { useLocalStorage, WebStorage, StorageValidationError } from 'vue-web-super-storage'
+
+const Settings = z.object({ theme: z.enum(['light', 'dark']), fontSize: z.number().default(14) })
+
+const [settings] = useLocalStorage('settings', { theme: 'light', fontSize: 14 }, {
+  schema: Settings,
+  version: 2,
+  migrations: {
+    1: old => ({ theme: old.dark ? 'dark' : 'light' }),  // v0（1.1.0 数据，没有 v 字段）→ v1
+    2: old => ({ ...old, fontSize: 14 })                 // v1 → v2
+  },
+  onInvalid: (key, error) => console.warn(key, error)   // 默认：非 production 环境 console.warn
+})
+
+// 函数式 schema：返回（可规范化的）值，或抛出异常
+const names = new WebStorage({ schema: v => { if (typeof v !== 'string') throw new Error('需要字符串'); return v.trim() } })
+try {
+  names.set('user', 42)                 // 写入前校验
+} catch (e) {
+  e instanceof StorageValidationError    // key / issues / cause
+}
+```
+
+规则：
+
+- **写入不合法就抛错**：`set` / `setValue` 先校验，失败同步抛出 `StorageValidationError`
+  （IndexedDB 适配器 reject），不会写入任何数据。直接给组合式 ref 赋不合法的值时，错误走 Vue
+  的错误处理，storage 不会被写入。
+- **读到不合法就回退**：返回 `defaultValue ?? null`，`has` / `keys` / `getAll` 视为不存在，原始
+  数据不删除，并触发 `onInvalid(key, error)`。
+- **迁移只跑一次**：`v` 小于 `version` 的数据（1.1.0 数据按 0 算）先迁移、再校验、然后带新版本号
+  写回（保留过期时间和混淆）。`migrations[n]` 负责 `n-1 → n`，缺失的步骤跳过；也可以只给一个
+  `migrate(old, from)`。版本号比当前更高的数据原样返回。
+- 落盘的是 schema 的输出，所以 zod 的 default / transform 会生效。异步 schema 只有 IndexedDB 支持。
+
+## IndexedDB（1.2.0）
+
+```ts
+import { createIndexedDBStorage, useIndexedDB } from 'vue-web-super-storage'
+
+const db = createIndexedDBStorage({ dbName: 'my-app', storeName: 'keyval', prefix: 'cache-', expires: 3600_000 })
+await db.set('profile', { id: 1 }, { expires: 60_000 })
+await db.get<{ id: number }>('profile')   // 不存在 / 过期 / 校验失败时为 null
+await db.has('profile'); await db.keys(); await db.getAll(); await db.remove('profile'); await db.clear()
+
+// 组合式：异步注水、合并写入、BroadcastChannel 跨标签页同步
+const { data, isReady, error, refresh, remove, setValue, flush } = useIndexedDB<string[]>('notes', [], {
+  dbName: 'my-app',
+  debounce: 50,            // 最后一次修改后多少毫秒写入，默认 0
+  syncAcrossTabs: true     // 频道名 'vue-web-super-storage:<dbName>:<prefix>'
+})
+data.value.push('hello')   // 到时间自动写入，或 await flush() 立即写入
+```
+
+`data` 初始为默认值，首次读取完成后 `isReady` 变为 `true`；读取期间的本地修改不会被覆盖；作用域
+销毁和 `pagehide` 时会把待写入的变更刷出去。没有 IndexedDB（SSR、受限浏览器）时适配器方法都是
+空操作并只警告一次；组合式函数在服务端既不读取也不警告。
+
+## Nuxt（1.2.0）
+
+```ts
+// nuxt.config.ts
+export default defineNuxtConfig({
+  modules: ['vue-web-super-storage/nuxt'],
+  webStorage: {
+    prefix: 'my-app-',
+    expires: 7 * 24 * 3600_000,
+    sessionStorage: { prefix: 'my-session-' },  // 可选覆盖
+    mode: 'all',                                 // 'client' 则只在浏览器安装插件
+    autoImports: true
+  }
+})
+```
+
+```vue
+<script setup lang="ts">
+// 自动导入：useLocalStorage / useSessionStorage / useIndexedDB / useWebStorage
+const [theme] = useLocalStorage('theme', 'light', { initOnMounted: true })
+const { data: notes, isReady } = useIndexedDB<string[]>('notes', [])
+const storage = useWebStorage()   // 插件服务端客户端都装，服务端调用都是空操作
+</script>
+```
+
+`@nuxt/kit >= 3` 是可选的 peerDependency，只在使用模块时需要。
+
+## SSR 注水建议
+
+- `useLocalStorage(key, default, { initOnMounted: true })`：setup 阶段保持默认值，`onMounted`
+  后再读 storage，服务端与客户端首帧一致；在组件外调用则立即读取。
+- `useIndexedDB` 天然异步：用 `isReady` 控制不希望闪动的内容（`<p v-if="isReady">`）。
 
 ## 贡献
 

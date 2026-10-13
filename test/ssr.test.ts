@@ -45,7 +45,7 @@ describe('server-side (no window)', () => {
 
   it('exposes the package version', () => {
     expect(lib.version).toBe(pkg.version);
-    expect(lib.version).toBe('1.1.0');
+    expect(lib.version).toBe('1.2.0');
   });
 
   it('encrypt / decrypt work in node too', () => {

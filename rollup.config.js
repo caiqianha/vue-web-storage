@@ -21,6 +21,8 @@ const versionReplace = () =>
     }
   });
 
+const nuxtExternal = ['@nuxt/kit', '@nuxt/schema', 'vue', pkg.name];
+
 module.exports = [
   // ES Module build
   {
@@ -76,5 +78,32 @@ module.exports = [
       format: 'es'
     },
     plugins: [dts()]
+  },
+  // Nuxt module (ESM only; @nuxt/kit is an optional peer dependency)
+  {
+    input: 'src/nuxt.ts',
+    output: {
+      file: 'dist/nuxt.mjs',
+      format: 'es',
+      banner,
+      sourcemap: true
+    },
+    plugins: [
+      versionReplace(),
+      typescript({
+        tsconfig: './tsconfig.json',
+        declaration: false
+      })
+    ],
+    external: nuxtExternal
+  },
+  {
+    input: 'src/nuxt.ts',
+    output: {
+      file: 'dist/nuxt.d.ts',
+      format: 'es'
+    },
+    plugins: [dts()],
+    external: nuxtExternal
   }
 ];

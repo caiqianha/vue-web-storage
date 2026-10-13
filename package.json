@@ -1,7 +1,7 @@
 {
   "name": "vue-web-super-storage",
-  "version": "1.1.0",
-  "description": "Typed localStorage / sessionStorage wrapper for Vue 3 with per-key TTL, namespaces, optional obfuscation, composables, plugin and cross-tab sync",
+  "version": "1.2.0",
+  "description": "Typed localStorage / sessionStorage / IndexedDB wrapper for Vue 3 and Nuxt with per-key TTL, namespaces, schema validation, versioned migrations, optional obfuscation, composables, plugin and cross-tab sync",
   "main": "dist/vue-web-storage.umd.js",
   "module": "dist/vue-web-storage.esm.js",
   "types": "dist/index.d.ts",
@@ -11,6 +11,11 @@
       "import": "./dist/vue-web-storage.esm.js",
       "require": "./dist/vue-web-storage.umd.js",
       "default": "./dist/vue-web-storage.esm.js"
+    },
+    "./nuxt": {
+      "types": "./dist/nuxt.d.ts",
+      "import": "./dist/nuxt.mjs",
+      "default": "./dist/nuxt.mjs"
     },
     "./package.json": "./package.json"
   },
@@ -41,19 +46,34 @@
     "typescript",
     "expire",
     "ttl",
-    "composable"
+    "composable",
+    "indexeddb",
+    "nuxt",
+    "nuxt-module",
+    "schema",
+    "migration",
+    "standard-schema"
   ],
   "author": "caiqianha",
   "license": "MIT",
   "peerDependencies": {
-    "vue": "^3.0.0"
+    "vue": "^3.0.0",
+    "@nuxt/kit": ">=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@nuxt/kit": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@nuxt/kit": "^4.5.2",
+    "@nuxt/schema": "^4.6.1",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@rollup/plugin-replace": "^6.0.2",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^12.1.4",
+    "fake-indexeddb": "^6.2.5",
     "happy-dom": "^15.11.7",
     "rollup": "^4.46.1",
     "rollup-plugin-dts": "^6.2.1",
@@ -61,7 +81,8 @@
     "typescript": "^5.8.3",
     "vite": "^6.4.4",
     "vitest": "^3.2.4",
-    "vue": "^3.5.18"
+    "vue": "^3.5.18",
+    "zod": "^4.6.7"
   },
   "repository": {
     "type": "git",
@@ -74,5 +95,12 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
+  },
+  "typesVersions": {
+    "*": {
+      "nuxt": [
+        "./dist/nuxt.d.ts"
+      ]
+    }
   }
 }

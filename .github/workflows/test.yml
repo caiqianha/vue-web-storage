@@ -25,3 +25,5 @@ jobs:
       - run: npm run build
       - name: dist smoke test (CommonJS require under Node, no DOM)
         run: node -e "const m = require('./dist/vue-web-storage.umd.js'); if (m.version !== require('./package.json').version) throw new Error('version mismatch'); if (m.local.get('x') !== null) throw new Error('get should be null')"
+      - name: dist smoke test (Nuxt module entry resolves and exports a module)
+        run: node -e "import('vue-web-super-storage/nuxt').then(m => { if (typeof m.default !== 'function') throw new Error('nuxt module missing') })"
