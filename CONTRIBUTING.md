@@ -32,3 +32,5 @@ Node 18 or newer is required (CI runs 18 / 20 / 22).
 ## Releasing (maintainers)
 
 Bump `version` in `package.json`, update `CHANGELOG.md`, then `npm publish`. `prepublishOnly` runs clean + typecheck + tests + build; the `version` export is injected from `package.json` at build time.
+
+By participating you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
